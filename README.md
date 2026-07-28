@@ -19,5 +19,3 @@ Developed a responsive, web-based ground control analytics platform designed to 
 * **Data Processing:** Pandas, NumPy
 * **AI/LLM Integration:** Ollama, Mistral 7B, Requests (HTTP Streaming API)
 * **Data Format:** CSV Telemetry Data
-
----
