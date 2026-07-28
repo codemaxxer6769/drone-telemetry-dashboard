@@ -24,11 +24,7 @@ Developed a responsive, web-based ground control analytics platform designed to 
 
 ## 🛠️ Roadmap for Future Expansion
 
-If you want to keep building on top of this foundation to turn it into an even heavier portfolio piece, here is exactly how to do it step-by-step:
-
 ### 1. Spatial Mapping (Lat / Lon)
-
-You don't need a heavy GIS engine to map your drone's flight path. If your CSV includes GPS coordinates, you can add an interactive map directly underneath your flight statistics chart with just a couple of lines:
 
 ```python
 st.subheader("🗺️ Flight Path Mapping")
@@ -40,14 +36,14 @@ st.map(map_data)
 
 ### 2. Multi-Flight History & Session State
 
-Instead of analyzing just one uploaded file at a time, you can implement a local database or cache directory. This allows users to:
+Instead of analyzing just one uploaded file at a time, implement a local database or cache directory. This allows users to:
 
 * Compare today's flight to a flight from last week.
 * Track motor degradation over months to predict *when* a part will fail before it actually does (Predictive Maintenance).
 
 ### 3. Flight Metric "KPI Cards"
 
-Add a summary block right above your charts using `st.columns()` to show high-level key performance indicators (KPIs) at a glance:
+Add a summary block right above the charts using `st.columns()` to show high-level key performance indicators (KPIs) at a glance:
 
 ```python
 col1, col2, col3 = st.columns(3)
