@@ -1,127 +1,250 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import pydeck as pdk
 import requests
 import json
 
 # Set up the Streamlit app configuration
-st.set_page_config(layout="wide", page_title="Drone Telemetry Dashboard", page_icon=":airplane:")
+st.set_page_config(layout="wide", page_title="Drone Telemetry Dashboard", page_icon="🚁")
 st.title("🚁 Interactive Drone Telemetry & AI Flight Analyst")
 
 # 1. Initialize session state memory for the report
 if "ai_report" not in st.session_state:
     st.session_state.ai_report = None
 
-# 2. Sidebar - File Upload/Generation
+# 2. Sidebar - File Upload / Data Source
 st.sidebar.header("Data Control Panel")
 
-# A function to wipe old AI reports whenever a brand new file is uploaded
 def clear_report_state():
     st.session_state.ai_report = None
 
 uploaded_file = st.sidebar.file_uploader(
     "Upload a Flight Log CSV", 
     type=["csv"], 
-    on_change=clear_report_state  # Triggers the wipe immediately when a new file drops in
+    on_change=clear_report_state
 )
 
-# Fallback to default if no file is uploaded
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.sidebar.success("File uploaded successfully!")
 else: 
-    # Use the mock data we generated
     try: 
-        df = pd.read_csv("data/mock_flight_log.csv")
+        # Tries new mock log, falls back to legacy path if not moved yet
+        df = pd.read_csv("mock_flight_log.csv")
     except FileNotFoundError:
-        st.sidebar.warning("No flight log uploaded and no mock data found. Please run data_generator.py first.")
-        st.stop()
+        try:
+            df = pd.read_csv("data/mock_flight_log.csv")
+        except FileNotFoundError:
+            st.sidebar.warning("No flight log uploaded and no mock data found.")
+            st.stop()
 
-# 3. Main Dashboard Metrics
-col1, col2, col3 = st.columns(3)
+# Helper function for Pydeck 3D Map
+def render_3d_flight_map(data_df):
+    st.subheader("🌐 3D Spatial Trajectory & Elevation")
+    
+    # Check for flexible column names (supports both schema naming conventions)
+    lat_col = 'latitude' if 'latitude' in data_df.columns else ('Latitude' if 'Latitude' in data_df.columns else None)
+    lon_col = 'longitude' if 'longitude' in data_df.columns else ('Longitude' if 'Longitude' in data_df.columns else None)
+    alt_col = 'altitude' if 'altitude' in data_df.columns else ('Altitude_m' if 'Altitude_m' in data_df.columns else None)
+
+    if not (lat_col and lon_col and alt_col):
+        st.error("Telemetry CSV is missing spatial coordinates (Latitude, Longitude, Altitude) required for 3D mapping.")
+        return
+
+    flight_path = data_df[[lon_col, lat_col, alt_col]].values.tolist()
+    
+    path_layer = pdk.Layer(
+        "PathLayer",
+        data=[{"path": flight_path, "color": [0, 200, 255]}],
+        get_path="path",
+        get_color="color",
+        width_min_pixels=4,
+        get_width=3,
+    )
+
+    start_pt = data_df.iloc[0]
+    end_pt = data_df.iloc[-1]
+    
+    markers_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=[
+            {"position": [start_pt[lon_col], start_pt[lat_col], start_pt[alt_col]], "color": [0, 255, 0], "point_type": "Takeoff"},
+            {"position": [end_pt[lon_col], end_pt[lat_col], end_pt[alt_col]], "color": [255, 0, 0], "point_type": "Landing"}
+        ],
+        get_position="position",
+        get_color="color",
+        get_radius=8,
+        radius_min_pixels=6,
+        pickable=True
+    )
+
+    initial_view_state = pdk.ViewState(
+        latitude=data_df[lat_col].mean(),
+        longitude=data_df[lon_col].mean(),
+        zoom=15,
+        pitch=60,
+        bearing=-30
+    )
+
+    deck = pdk.Deck(
+        layers=[path_layer, markers_layer],
+        initial_view_state=initial_view_state,
+        map_style="mapbox://styles/mapbox/dark-v10",
+        tooltip={"text": "Point: {point_type}"}
+    )
+
+    st.pydeck_chart(deck)
+
+# 3. Main Dashboard KPI Metrics Row
+col1, col2, col3, col4 = st.columns(4)
+
+# Dynamic mapping for column differences between old/new CSVs
+alt_val = df['altitude'].max() if 'altitude' in df.columns else df.get('Altitude_m', pd.Series([0])).max()
+speed_val = df['speed_ms'].max() if 'speed_ms' in df.columns else 0.0
+drag_val = df['drag_force_n'].max() if 'drag_force_n' in df.columns else 0.0
+battery_val = df['battery_pct'].iloc[-1] if 'battery_pct' in df.columns else df.get('Battery_V', pd.Series([0])).min()
+battery_unit = "%" if 'battery_pct' in df.columns else "V"
+
 with col1:
-    st.metric("Max Altitude", f"{df['Altitude_m'].max():.2f} m")
+    st.metric("Max Altitude", f"{alt_val:.2f} m")
 with col2:
-    st.metric("Min Battery Voltage", f"{df['Battery_V'].min():.2f} V")
+    st.metric("Max Speed", f"{speed_val:.2f} m/s" if speed_val else "N/A")
 with col3:
-    st.metric("Max Motor 2 Temperature", f"{df['Motor_2_Temp_C'].max():.2f} °C")
+    st.metric("Peak Drag Force", f"{drag_val:.2f} N" if drag_val else "N/A")
+with col4:
+    st.metric("Battery Status", f"{battery_val:.1f} {battery_unit}")
 
-# 4. Interactive Plotting with Plotly
-st.subheader("📊 Flight Telemetry Graphs")
-fig_alt = px.line(df, x="Timestamp", y="Altitude_m", title="Altitude Profile", labels={"Altitude_m": "Altitude (m)", "Timestamp": "Time (s)"})
-st.plotly_chart(fig_alt, use_container_width=True)
+st.markdown("---")
 
-fig_motors = px.line(df, x="Timestamp", y=["Motor_1_Temp_C", "Motor_2_Temp_C"], title="Motor Temperature Trends")
-st.plotly_chart(fig_motors, use_container_width=True)
+# 4. Categorized Tabs Layout
+tab1, tab2, tab3 = st.tabs([
+    "🌐 3D Spatial Trajectory", 
+    "🚀 Aerodynamics & Physics", 
+    "⚡ Hardware & Power Trends"
+])
 
-# 5. AI Diagnostics Panel (Ollama + Mistral)
+with tab1:
+    render_3d_flight_map(df)
+
+with tab2:
+    st.subheader("Aerodynamic Forces & Velocity")
+    time_col = 'timestamp_sec' if 'timestamp_sec' in df.columns else 'Timestamp'
+    y_cols = [c for c in ['drag_force_n', 'thrust_force_n', 'speed_ms'] if c in df.columns]
+    
+    if y_cols:
+        fig_physics = px.line(df, x=time_col, y=y_cols, title="Thrust vs. Aerodynamic Drag vs. Speed")
+        st.plotly_chart(fig_physics, use_container_width=True)
+    else:
+        st.info("Additional aerodynamics columns (drag, thrust, speed) not found in current CSV.")
+
+with tab3:
+    st.subheader("Power & Thermal Diagnostics")
+    time_col = 'timestamp_sec' if 'timestamp_sec' in df.columns else 'Timestamp'
+    thermal_cols = [c for c in ['battery_pct', 'motor_temp_c', 'Motor_1_Temp_C', 'Motor_2_Temp_C', 'Battery_V'] if c in df.columns]
+    
+    fig_power = px.line(df, x=time_col, y=thermal_cols, title="Thermal & Battery Health Trends")
+    st.plotly_chart(fig_power, use_container_width=True)
+
+# ----------------------------------------------------
+# 5. AI Diagnostics Panel (Groq Cloud API + Ollama Local + Fallback)
+# ----------------------------------------------------
 st.subheader("🤖 AI Flight Diagnostics")
 
-# Extract metrics from your actual uploaded data
-max_alt = float(df['Altitude_m'].max())
-min_bat = float(df['Battery_V'].min())
-max_m1_temp = float(df['Motor_1_Temp_C'].max())
-max_m2_temp = float(df['Motor_2_Temp_C'].max())
+max_alt_val = float(alt_val)
+max_speed_val = float(speed_val)
+max_drag_val = float(drag_val)
+max_thrust_val = float(df['thrust_force_n'].max()) if 'thrust_force_n' in df.columns else 0.0
+motor_temp_val = float(df['motor_temp_c'].max()) if 'motor_temp_c' in df.columns else float(df.get('Motor_2_Temp_C', pd.Series([0])).max())
 
 if st.button("Generate AI Flight Analysis Report"):
-    # Pre-populate with the layout block so it shows up instantly like your second image!
-    report_placeholder = st.info("🔄 Initiating analysis engine...")
+    report_placeholder = st.info("🔄 Initiating AI analysis engine...")
     live_text = ""
-    
-    with st.spinner("Mistral 7B is analyzing telemetry trends..."):
-        prompt = f"""
-        You are an expert drone telemetry analysis AI. Analyze these flight statistics:
-        - Maximum Altitude: {max_alt:.2f} meters
-        - Minimum Battery Voltage: {min_bat:.2f} Volts
-        - Maximum Motor 1 Temperature: {max_m1_temp:.2f}°C
-        - Maximum Motor 2 Temperature: {max_m2_temp:.2f}°C
 
-        Provide a concise diagnostic report (under 150 words).
-        Identify if any components are operating outside safe parameters.
-        """
+    prompt = f"""
+    You are an expert drone telemetry and aerodynamics analysis AI. Analyze these flight statistics:
+    - Maximum Altitude: {max_alt_val:.2f} meters
+    - Maximum Ground Speed: {max_speed_val:.2f} m/s
+    - Peak Aerodynamic Drag Force: {max_drag_val:.2f} N
+    - Peak Motor Thrust Force: {max_thrust_val:.2f} N
+    - Maximum Motor Temperature: {motor_temp_val:.2f}°C
+    - Final Battery Status: {battery_val:.1f}{battery_unit}
 
+    Provide a concise flight diagnostic report (under 150 words).
+    1. Evaluate aerodynamic efficiency (drag vs thrust ratio).
+    2. Identify if thermal levels or battery discharge pose hardware safety risks.
+    3. Give clear actionable maintenance recommendations.
+    """
+
+    # --- OPTION A: Try Groq Cloud API (For Live Web Deployment) ---
+    if "GROQ_API_KEY" in st.secrets:
         try:
-            response = requests.post(
-                "http://localhost:11434/api/generate", 
-                json={
-                    "model": "mistral:latest", 
-                    "prompt": prompt,
-                    "stream": True
-                },
-                stream=True,
-                timeout=5 # Low timeout to catch local server stalls quickly
-            )
+            headers = {
+                "Authorization": f"Bearer {st.secrets['GROQ_API_KEY']}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "mistral:latest",
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True
+            }
             
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=10
+            )
+
             if response.status_code == 200:
                 for line in response.iter_lines():
                     if line:
-                        chunk = json.loads(line.decode('utf-8'))
-                        token = chunk.get("response", "")
-                        live_text += token
-                        report_placeholder.info(live_text + " ▌")
-                
-                # Render final response
+                        line_str = line.decode('utf-8')
+                        if line_str.startswith("data: ") and line_str != "data: [DONE]":
+                            chunk = json.loads(line_str[6:])
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            live_text += delta
+                            report_placeholder.info(live_text + " ▌")
+
                 if live_text.strip():
                     report_placeholder.info(live_text)
-                    st.stop() # Stop execution here if successful
-                    
+                    st.stop()
         except Exception:
-            pass # Fall back seamlessly if connection fails
-            
-        # --- FALLBACK ENGINE ---
-        # If Ollama didn't return text, we build the exact markdown report using your real CSV values!
-        fallback_report = f"""**Diagnostic Report:**
+            pass  # If Groq request fails, gracefully drop down to local/fallback
 
-The drone flight statistics show some concerning readings. The maximum temperature of Motor 2 ({max_m2_temp:.2f}°C) exceeds the recommended safe operating limit for most motors (typically below 80°C). This could indicate a potential issue such as a blocked intake, excessive load, or motor fault.
+    # --- OPTION B: Try Local Ollama (For Local Development on PC) ---
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": "mistral:latest", "prompt": prompt, "stream": True},
+            stream=True,
+            timeout=3
+        )
+        if response.status_code == 200:
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    live_text += chunk.get("response", "")
+                    report_placeholder.info(live_text + " ▌")
+            if live_text.strip():
+                report_placeholder.info(live_text)
+                st.stop()
+    except Exception:
+        pass
 
-Additionally, the minimum battery voltage ({min_bat:.2f}V) is slightly lower than the standard lower threshold of 11.0V for lithium-polymer batteries. This may suggest an inefficient flight or aging battery.
+    # --- OPTION C: Automated Fallback Engine (Safety net) ---
+    fallback_report = f"""**Diagnostic Report (Automated Fallback Engine):**
+
+The drone completed the flight with a peak altitude of **{max_alt_val:.2f} m** and max ground speed of **{max_speed_val:.2f} m/s**.
+
+**Aerodynamic & Thermal Performance:**
+- Aerodynamic drag hit a maximum of **{max_drag_val:.2f} N**, requiring motor thrust of up to **{max_thrust_val:.2f} N**.
+- Motor temperature reached **{motor_temp_val:.2f}°C**. {"⚠️ Temperature is elevated, monitor cooling." if motor_temp_val > 75 else "Thermal levels remained nominal."}
+- Ending battery state: **{battery_val:.1f}{battery_unit}**.
 
 **Recommendations:**
+1. Check motor mounts if thrust-to-drag ratio drops unexpectedly.
+2. Ensure motor heat dissipation channels are clear prior to launch."""
 
-1. Inspect Motor 2 and clear any potential blockages, if present.
-2. Perform a load test to ensure the motor is not under excessive stress.
-3. Check the battery for signs of wear and replace it if necessary.
-4. Monitor flight parameters closely during future flights to prevent overheating or low voltage situations."""
-        
-        # Instantly replace the placeholder text inside the blue box!
-        report_placeholder.info(fallback_report)
+    report_placeholder.info(fallback_report)
