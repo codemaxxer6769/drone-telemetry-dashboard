@@ -1,4 +1,3 @@
-# generate_mock_log.py
 import pandas as pd
 import numpy as np
 
@@ -12,7 +11,11 @@ base_lon = -104.6178
 # Simulated helical/circular flight trajectory
 latitudes = base_lat + (np.sin(time_steps * 0.02) * 0.002) + (time_steps * 0.000005)
 longitudes = base_lon + (np.cos(time_steps * 0.02) * 0.002) + (time_steps * 0.000005)
-altitudes = 10 + (np.sin(time_steps * 0.01) * 5) + (time_steps * 0.25)  # Climbing altitude (10m to ~85m)
+
+# --- ALTITUDE CURVE UPDATE ---
+# Uses a smooth sine arc across the 300s duration so the drone takes off from ~10m,
+# reaches a peak altitude around ~85m during cruise, and descends back down for landing.
+altitudes = 10 + 75 * np.sin(np.pi * (time_steps / 300))
 
 # Speed & Physics calculations
 # Ground speed (m/s) with dynamic variations
@@ -35,7 +38,7 @@ mock_df = pd.DataFrame({
     'timestamp_sec': time_steps,
     'latitude': latitudes,
     'longitude': longitudes,
-    'altitude': altitudes,
+    'altitude': np.round(altitudes, 2),
     'speed_ms': np.round(speed_ms, 2),
     'drag_force_n': np.round(drag_force_n, 2),
     'thrust_force_n': np.round(thrust_force_n, 2),
@@ -45,4 +48,4 @@ mock_df = pd.DataFrame({
 
 # Save to CSV
 mock_df.to_csv('mock_flight_log.csv', index=False)
-print("Updated 'mock_flight_log.csv' successfully with physics and spatial metrics!")
+print("Updated 'mock_flight_log.csv' successfully with complete landing profile and physics metrics!")

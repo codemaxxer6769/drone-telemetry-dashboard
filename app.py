@@ -43,15 +43,18 @@ else:
 def render_3d_flight_map(data_df):
     st.subheader("🌐 3D Spatial Trajectory & Elevation")
     
-    # Check for flexible column names (supports both schema naming conventions)
+    # Check for flexible column names
     lat_col = 'latitude' if 'latitude' in data_df.columns else ('Latitude' if 'Latitude' in data_df.columns else None)
     lon_col = 'longitude' if 'longitude' in data_df.columns else ('Longitude' if 'Longitude' in data_df.columns else None)
-    alt_col = 'altitude' if 'altitude' in data_df.columns else ('Altitude_m' if 'Altitude_m' in data_df.columns else None)
+    alt_col = 'altitude' if 'altitude' in data_df.columns else ('altitude_m' if 'altitude_m' in data_df.columns else ('Altitude_m' if 'Altitude_m' in data_df.columns else None))
 
     if not (lat_col and lon_col and alt_col):
         st.error("Telemetry CSV is missing spatial coordinates (Latitude, Longitude, Altitude) required for 3D mapping.")
         return
+    # Create a rounded altitude column specifically for clean tooltips!
+    data_df['alt_display'] = data_df[alt_col].round(2)
 
+    # Flight path layer (Blue Line)
     flight_path = data_df[[lon_col, lat_col, alt_col]].values.tolist()
     
     path_layer = pdk.Layer(
@@ -63,6 +66,7 @@ def render_3d_flight_map(data_df):
         get_width=3,
     )
 
+    # Takeoff & Landing markers (Green & Red Dots)
     start_pt = data_df.iloc[0]
     end_pt = data_df.iloc[-1]
     
@@ -79,6 +83,19 @@ def render_3d_flight_map(data_df):
         pickable=True
     )
 
+    # 3D Columns under path (Visual Altitude Extrusion)
+    column_layer = pdk.Layer(
+        "ColumnLayer",
+        data=data_df,
+        get_position=[lon_col, lat_col],
+        get_elevation=alt_col,
+        elevation_scale=1,
+        radius=2,
+        get_fill_color="[255, 100, 0, 160]",
+        pickable=True,
+        auto_highlight=True,
+    )
+
     initial_view_state = pdk.ViewState(
         latitude=data_df[lat_col].mean(),
         longitude=data_df[lon_col].mean(),
@@ -87,14 +104,13 @@ def render_3d_flight_map(data_df):
         bearing=-30
     )
 
-    deck = pdk.Deck(
-        layers=[path_layer, markers_layer],
+    # Render Pydeck map with open-source CartoDB dark basemap tiles
+    st.pydeck_chart(pdk.Deck(
+        map_style='https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
         initial_view_state=initial_view_state,
-        map_style="mapbox://styles/mapbox/dark-v10",
-        tooltip={"text": "Point: {point_type}"}
-    )
-
-    st.pydeck_chart(deck)
+        layers=[path_layer, column_layer, markers_layer],
+        tooltip={"text": "Altitude: {alt_display} m\nSpeed: {speed_ms} m/s"}
+    ))
 
 # 3. Main Dashboard KPI Metrics Row
 col1, col2, col3, col4 = st.columns(4)
@@ -138,6 +154,18 @@ with tab2:
     else:
         st.info("Additional aerodynamics columns (drag, thrust, speed) not found in current CSV.")
 
+    st.subheader("📈 Altitude Profile Over Time")
+
+    # Check for all variations of the altitude column name
+    if 'altitude' in df.columns:
+        st.line_chart(df['altitude'])
+    elif 'altitude_m' in df.columns:
+        st.line_chart(df['altitude_m'])
+    elif 'Altitude_m' in df.columns:
+        st.line_chart(df['Altitude_m'])
+    else:
+        st.info("Altitude data column not detected in current CSV.")
+
 with tab3:
     st.subheader("Power & Thermal Diagnostics")
     time_col = 'timestamp_sec' if 'timestamp_sec' in df.columns else 'Timestamp'
@@ -177,14 +205,22 @@ if st.button("Generate AI Flight Analysis Report"):
     """
 
     # --- OPTION A: Try Groq Cloud API ---
-    if "GROQ_API_KEY" in st.secrets:
+    # Safely fetch API key without crashing if secrets.toml is missing locally
+    groq_api_key = None
+    try:
+        if "GROQ_API_KEY" in st.secrets:
+            groq_api_key = st.secrets["GROQ_API_KEY"]
+    except Exception:
+        pass
+
+    if groq_api_key:
         try:
             headers = {
-                "Authorization": f"Bearer {st.secrets['GROQ_API_KEY']}",
+                "Authorization": f"Bearer {groq_api_key}",
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "llama-3.1-8b-instant",
+                "model": "mixtral-8x7b-32768",
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True
             }
@@ -211,14 +247,14 @@ if st.button("Generate AI Flight Analysis Report"):
                     report_placeholder.info(live_text)
                     st.stop()
             else:
-                # Debugging message if API returns 401/400 error
-                st.error(f"Groq API Error {response.status_code}: {response.text}")
+                # Silently ignore HTTP errors so execution moves to the Fallback Engine
+                pass
                 
-        except Exception as e:
-            # Debugging message if connection or code fails
-            st.warning(f"Groq Connection Warning: {e}")
+        except Exception:
+            # Silently catch network timeouts/connection errors
+            pass
 
-    # --- OPTION C: Automated Fallback Engine (Safety net) ---
+    # --- OPTION B: Automated Fallback Engine (Safety net) ---
     fallback_report = f"""**Diagnostic Report (Automated Fallback Engine):**
 
 The drone completed the flight with a peak altitude of **{max_alt_val:.2f} m** and max ground speed of **{max_speed_val:.2f} m/s**.
