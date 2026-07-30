@@ -205,7 +205,6 @@ if st.button("Generate AI Flight Analysis Report"):
     """
 
     # --- OPTION A: Try Groq Cloud API ---
-    # Safely fetch API key without crashing if secrets.toml is missing locally
     groq_api_key = None
     try:
         if "GROQ_API_KEY" in st.secrets:
@@ -219,42 +218,65 @@ if st.button("Generate AI Flight Analysis Report"):
                 "Authorization": f"Bearer {groq_api_key}",
                 "Content-Type": "application/json"
             }
-            payload = {
-                "model": "mixtral-8x7b-32768",
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True
-            }
+
+            # 1. Dynamically fetch currently available models from Groq
+            models_res = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=5)
+            active_models = []
+            if models_res.status_code == 200:
+                active_models = [m["id"] for m in models_res.json().get("data", [])]
+
+            # 2. Pick the first available active model from preferred candidates
+            preferred_candidates = [
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+                "qwen/qwen3.6-27b",
+                "openai/gpt-oss-120b"
+            ]
             
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                stream=True,
-                timeout=10
-            )
+            selected_model = None
+            for candidate in preferred_candidates:
+                if candidate in active_models:
+                    selected_model = candidate
+                    break
+            
+            # If none of preferred are found, grab the first available text model
+            if not selected_model and active_models:
+                selected_model = active_models[0]
 
-            if response.status_code == 200:
-                for line in response.iter_lines():
-                    if line:
-                        line_str = line.decode('utf-8')
-                        if line_str.startswith("data: ") and line_str != "data: [DONE]":
-                            chunk = json.loads(line_str[6:])
-                            delta = chunk["choices"][0]["delta"].get("content", "")
-                            live_text += delta
-                            report_placeholder.info(live_text + " ▌")
-
-                if live_text.strip():
-                    report_placeholder.info(live_text)
-                    st.stop()
-            else:
-                # Silently ignore HTTP errors so execution moves to the Fallback Engine
-                pass
+            if selected_model:
+                st.caption(f"⚡ Running live telemetry analysis via `{selected_model}`")
+                payload = {
+                    "model": selected_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": True
+                }
                 
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    stream=True,
+                    timeout=10
+                )
+
+                if response.status_code == 200:
+                    for line in response.iter_lines():
+                        if line:
+                            line_str = line.decode('utf-8')
+                            if line_str.startswith("data: ") and line_str != "data: [DONE]":
+                                chunk = json.loads(line_str[6:])
+                                delta = chunk["choices"][0]["delta"].get("content", "")
+                                live_text += delta
+                                report_placeholder.info(live_text + " ▌")
+
+                    if live_text.strip():
+                        report_placeholder.info(live_text)
+                        st.stop()
+
         except Exception:
-            # Silently catch network timeouts/connection errors
             pass
 
-    # --- OPTION B: Automated Fallback Engine (Safety net) ---
+    # --- OPTION C: Automated Fallback Engine (Safety net) ---
     fallback_report = f"""**Diagnostic Report (Automated Fallback Engine):**
 
 The drone completed the flight with a peak altitude of **{max_alt_val:.2f} m** and max ground speed of **{max_speed_val:.2f} m/s**.
