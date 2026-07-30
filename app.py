@@ -51,10 +51,11 @@ def render_3d_flight_map(data_df):
     if not (lat_col and lon_col and alt_col):
         st.error("Telemetry CSV is missing spatial coordinates (Latitude, Longitude, Altitude) required for 3D mapping.")
         return
+        
     # Create a rounded altitude column specifically for clean tooltips!
     data_df['alt_display'] = data_df[alt_col].round(2)
 
-    # Flight path layer (Blue Line)
+    # Flight path layer (Blue Line - keeps smooth trajectory with all points)
     flight_path = data_df[[lon_col, lat_col, alt_col]].values.tolist()
     
     path_layer = pdk.Layer(
@@ -83,15 +84,18 @@ def render_3d_flight_map(data_df):
         pickable=True
     )
 
+    # --- THE FIX: Downsample points for 3D columns to avoid dense "wall" clutter ---
+    map_columns_df = data_df.iloc[::3].copy()
+
     # 3D Columns under path (Visual Altitude Extrusion)
     column_layer = pdk.Layer(
         "ColumnLayer",
-        data=data_df,
+        data=map_columns_df,  # <--- Use spaced-out dataframe here!
         get_position=[lon_col, lat_col],
         get_elevation=alt_col,
         elevation_scale=1,
-        radius=2,
-        get_fill_color="[255, 100, 0, 160]",
+        radius=1.5,
+        get_fill_color="[255, 100, 0, 140]", # Slightly softer opacity
         pickable=True,
         auto_highlight=True,
     )
@@ -99,7 +103,7 @@ def render_3d_flight_map(data_df):
     initial_view_state = pdk.ViewState(
         latitude=data_df[lat_col].mean(),
         longitude=data_df[lon_col].mean(),
-        zoom=15,
+        zoom=14.5,
         pitch=60,
         bearing=-30
     )
