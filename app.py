@@ -176,7 +176,7 @@ if st.button("Generate AI Flight Analysis Report"):
     3. Give clear actionable maintenance recommendations.
     """
 
-    # --- OPTION A: Try Groq Cloud API (For Live Web Deployment) ---
+    # --- OPTION A: Try Groq Cloud API ---
     if "GROQ_API_KEY" in st.secrets:
         try:
             headers = {
@@ -184,7 +184,7 @@ if st.button("Generate AI Flight Analysis Report"):
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "mistral:latest",
+                "model": "llama-3.1-8b-instant",
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True
             }
@@ -210,28 +210,13 @@ if st.button("Generate AI Flight Analysis Report"):
                 if live_text.strip():
                     report_placeholder.info(live_text)
                     st.stop()
-        except Exception:
-            pass  # If Groq request fails, gracefully drop down to local/fallback
-
-    # --- OPTION B: Try Local Ollama (For Local Development on PC) ---
-    try:
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": "mistral:latest", "prompt": prompt, "stream": True},
-            stream=True,
-            timeout=3
-        )
-        if response.status_code == 200:
-            for line in response.iter_lines():
-                if line:
-                    chunk = json.loads(line.decode('utf-8'))
-                    live_text += chunk.get("response", "")
-                    report_placeholder.info(live_text + " ▌")
-            if live_text.strip():
-                report_placeholder.info(live_text)
-                st.stop()
-    except Exception:
-        pass
+            else:
+                # Debugging message if API returns 401/400 error
+                st.error(f"Groq API Error {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            # Debugging message if connection or code fails
+            st.warning(f"Groq Connection Warning: {e}")
 
     # --- OPTION C: Automated Fallback Engine (Safety net) ---
     fallback_report = f"""**Diagnostic Report (Automated Fallback Engine):**
